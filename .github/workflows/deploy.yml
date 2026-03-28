@@ -37,28 +37,36 @@ jobs:
 
       - name: Generate deployments list
         if: github.ref == 'refs/heads/main'
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           # Fetch latest deployments from Cloudflare Pages API
-          RESPONSE=$(curl -s \
-            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
-            "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/pages/projects/${{ env.PROJECT_NAME }}/deployments?sort_by=created_on&sort_order=desc&per_page=50")
+          RESPONSE=$(curl -sf \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}/deployments?sort_by=created_on&sort_order=desc&per_page=50" || true)
 
-          # Parse into deployments.json using jq
-          echo "$RESPONSE" | jq '{
-            generated_at: now | todate,
-            deployments: [
-              .result[]
-              | select(.latest_stage.name == "deploy" and .latest_stage.status == "success")
-              | {
-                  branch: .deployment_trigger.metadata.branch,
-                  url: .url,
-                  created_on: .created_on,
-                  commit_hash: .deployment_trigger.metadata.commit_hash,
-                  commit_message: .deployment_trigger.metadata.commit_message
-                }
-            ]
-            | unique_by(.branch)
-          }' > public/deployments.json
+          # Check if we got a valid response with results
+          if echo "$RESPONSE" | jq -e '.result' > /dev/null 2>&1; then
+            echo "$RESPONSE" | jq '{
+              generated_at: now | todate,
+              deployments: [
+                .result[]
+                | select(.latest_stage.name == "deploy" and .latest_stage.status == "success")
+                | {
+                    branch: .deployment_trigger.metadata.branch,
+                    url: .url,
+                    created_on: .created_on,
+                    commit_hash: .deployment_trigger.metadata.commit_hash,
+                    commit_message: .deployment_trigger.metadata.commit_message
+                  }
+              ]
+              | unique_by(.branch)
+            }' > public/deployments.json
+          else
+            echo "API returned no results, writing empty deployments"
+            echo '{"generated_at":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","deployments":[]}' > public/deployments.json
+          fi
 
           echo "Generated deployments.json:"
           cat public/deployments.json

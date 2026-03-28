@@ -8,7 +8,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-# Only allow one deployment per branch at a time
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
@@ -22,6 +21,8 @@ jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
+    env:
+      PROJECT_NAME: ${{ vars.CLOUDFLARE_PROJECT_NAME || 'solutions-hub' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,7 +33,35 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages project create ${{ vars.CLOUDFLARE_PROJECT_NAME || 'solutions-hub' }} --production-branch=main
+          command: pages project create ${{ env.PROJECT_NAME }} --production-branch=main
+
+      - name: Generate deployments list
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # Fetch latest deployments from Cloudflare Pages API
+          RESPONSE=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/pages/projects/${{ env.PROJECT_NAME }}/deployments?sort_by=created_on&sort_order=desc&per_page=50")
+
+          # Parse into deployments.json using jq
+          echo "$RESPONSE" | jq '{
+            generated_at: now | todate,
+            deployments: [
+              .result[]
+              | select(.latest_stage.name == "deploy" and .latest_stage.status == "success")
+              | {
+                  branch: .deployment_trigger.metadata.branch,
+                  url: .url,
+                  created_on: .created_on,
+                  commit_hash: .deployment_trigger.metadata.commit_hash,
+                  commit_message: .deployment_trigger.metadata.commit_message
+                }
+            ]
+            | unique_by(.branch)
+          }' > public/deployments.json
+
+          echo "Generated deployments.json:"
+          cat public/deployments.json
 
       - name: Deploy to Cloudflare Pages
         id: deploy
@@ -40,7 +69,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy public --project-name=${{ vars.CLOUDFLARE_PROJECT_NAME || 'solutions-hub' }} --branch=${{ github.head_ref || github.ref_name }} --commit-dirty=true
+          command: pages deploy public --project-name=${{ env.PROJECT_NAME }} --branch=${{ github.head_ref || github.ref_name }} --commit-dirty=true
 
       - name: Comment preview URL on PR
         if: github.event_name == 'pull_request'
@@ -60,7 +89,6 @@ jobs:
               '_Deployed via Cloudflare Pages_'
             ].join('\n');
 
-            // Find existing bot comment to update
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,

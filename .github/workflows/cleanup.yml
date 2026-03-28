@@ -1,0 +1,24 @@
+name: Cleanup Preview Deployments
+
+on:
+  delete:
+    branches:
+      - '**'
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Remove Preview
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log cleanup
+        run: |
+          BRANCH="${{ github.event.ref || github.event.pull_request.head.ref }}"
+          echo "## Preview Cleanup" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch \`${BRANCH}\` was deleted/merged." >> $GITHUB_STEP_SUMMARY
+          echo "Cloudflare Pages automatically deactivates preview deployments for deleted branches." >> $GITHUB_STEP_SUMMARY
